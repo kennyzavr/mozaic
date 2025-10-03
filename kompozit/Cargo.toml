@@ -1,0 +1,17 @@
+[package]
+name = "kompozit"
+description = ""
+keywords = []
+categories = []
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kompozit-core.workspace = true
+kompozit-macros.workspace = true
+
+[lints]
+workspace = true
