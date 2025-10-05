@@ -1,20 +1,18 @@
 use proc_macro2::Span;
 
-use crate::ComposeNode;
-use crate::id::EntityId;
+use super::ComposeNode;
+use super::id::Id;
 
-pub struct Selection<Parent> {
+pub(super) struct Selection<Parent> {
     parent: Parent,
-    span: proc_macro2::Span,
     name_prefix: String,
     variants: Vec<proc_macro2::Span>,
 }
 
-pub struct Variant {
+pub(super) struct Variant {
     index: usize,
-    span: proc_macro2::Span,
     name_prefix: String,
-    selection_span: proc_macro2::Span,
+    span: proc_macro2::Span,
 }
 
 fn selection_id_name(prefix: &str) -> String {
@@ -30,29 +28,27 @@ format!("{} selection variant {} composer", prefix, variant_index)
 }
 
 impl<Parent: ComposeNode> Selection<Parent> {
-    pub fn new(parent: Parent, span: proc_macro2::Span) -> Self {
+    pub(super) fn new(parent: Parent) -> Self {
         let name_prefix = parent.id().name.as_ref().to_owned();
         Self {
-            span,
             name_prefix,
             parent,
             variants: vec![],
         }
     }
 
-    pub fn add_variant(&mut self, span: proc_macro2::Span) -> Variant {
+    pub(super) fn add_variant(&mut self, span: proc_macro2::Span) -> Variant {
         self.variants.push(span);
         Variant {
             index: self.variants.len() - 1,
             name_prefix: self.parent.id().name.as_ref().to_owned(),
             span,
-            selection_span: self.span,
         }
     }
 
-    pub fn prologue(&self) -> proc_macro2::TokenStream {
+    pub(super) fn prologue(&self) -> proc_macro2::TokenStream {
         let (selection_gt, selection_gv, selection_lv) = {
-            let id = EntityId {
+            let id = Id {
                 name: selection_id_name(&self.name_prefix),
                 span: Span::mixed_site(),
             };
@@ -64,7 +60,7 @@ impl<Parent: ComposeNode> Selection<Parent> {
             .iter()
             .enumerate()
             .map(|(index, _span)| 
-            EntityId {
+            Id {
                 name: variant_id_name(&self.name_prefix, index),
                 span: Span::mixed_site(),
             }.lt()
@@ -73,17 +69,17 @@ impl<Parent: ComposeNode> Selection<Parent> {
         let uninit_variant_lt = quote::format_ident!("Uninit");
         let variant_infer = vec![quote::quote! { _ }; self.variants.len()];
 
-        let viewer_gt = EntityId {
+        let viewer_gt = Id {
             name: format!("{} selection viewer", self.name_prefix),
-            span: self.span,
+            span: Span::mixed_site(),
         }
         .gt();
 
         let parent_gv = self.parent.id().gv();
         let parent_prologue = self.parent.prologue();
 
-        let variant = self.variants.iter().enumerate().map(|(index, span)| {
-            let id = EntityId {
+        let variant = self.variants.iter().enumerate().map(|(index, _span)| {
+            let id = Id {
                 name: variant_id_name(&self.name_prefix, index),
                 span: Span::mixed_site(),
             };
@@ -212,18 +208,19 @@ impl<Parent: ComposeNode> Selection<Parent> {
             #parent_prologue
 
             #[allow(non_snake_case)]
+            #[allow(unused_mut)]
             let mut #selection_gv: &mut #selection_gt<_, #(#variant_infer),*> = #parent_gv;
         }
     }
 
-    pub fn epilogue(&self) -> proc_macro2::TokenStream {
+    pub(super) fn epilogue(&self) -> proc_macro2::TokenStream {
         self.parent.epilogue()
     }
 }
 
 impl ComposeNode for Variant {
-    fn id(&self) -> EntityId<impl AsRef<str>> {
-        EntityId {
+    fn id(&self) -> Id<impl AsRef<str>> {
+        Id {
             name: variant_id_name(&self.name_prefix, self.index),
             span: Span::mixed_site(),
         }
@@ -235,18 +232,18 @@ impl ComposeNode for Variant {
             (id.gt(), id.gv())
         };
 
-        let selection_gv = EntityId {
+        let selection_gv = Id {
             name: selection_id_name(&self.name_prefix),
             span: Span::mixed_site(),
         }.gv();
 
-        let composer_gv = EntityId {
+        let composer_gv = Id {
             name: variant_composer_id_name(&self.name_prefix, self.index),
             span: Span::mixed_site(),
         }
         .gv();
 
-        let default_slot_gv = EntityId {
+        let default_slot_gv = Id {
             name: format!("{} selection variant {} default slot", self.name_prefix, self.index),
             span: Span::mixed_site(),
         }
@@ -255,15 +252,18 @@ impl ComposeNode for Variant {
         if self.index == 0 {
             quote::quote_spanned! { Span::mixed_site() =>
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #composer_gv = ::kompozit::private::composer(&*#selection_gv);
 
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #variant_gv = {
                     use ::core::convert::From;
                     #variant_gt::from(&mut #selection_gv)
                 };
 
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #default_slot_gv = ::kompozit::Composition::init();
 
                 #[allow(non_snake_case)]
@@ -276,15 +276,18 @@ impl ComposeNode for Variant {
         } else {
             quote::quote_spanned! { Span::mixed_site() =>
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #composer_gv = ::kompozit::private::composer(&*#selection_gv);
 
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #variant_gv = {
                     use ::core::convert::From;
                     #variant_gt::from(&mut #selection_gv)
                 };
 
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #default_slot_gv = ::kompozit::Composition::init();
 
                 #[allow(non_snake_case)]
@@ -298,16 +301,15 @@ impl ComposeNode for Variant {
     }
     
     fn epilogue(&self) -> proc_macro2::TokenStream {
-        let composer_gv = EntityId {
+        let composer_gv = Id {
             name: variant_composer_id_name(&self.name_prefix, self.index),
             span: Span::mixed_site(),
         }
         .gv();
 
-            let variant_gv = EntityId {
+            let variant_gv = Id {
                 name: variant_id_name(&self.name_prefix, self.index),
                 span: Span::mixed_site().located_at(self.span),
-                // span: Span::mixed_site(),
             }.gv();
 
             let call = quote::quote_spanned! { Span::mixed_site().located_at(self.span) =>

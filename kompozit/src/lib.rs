@@ -1,10 +1,12 @@
 use std::marker::PhantomData;
 
-pub use kompozit_macros::comp;
-
 pub use kompozit_core::*;
 
+#[doc(hidden)]
 pub use kompozit_macros::compose;
+
+pub use kompozit_macros::comp;
+pub use kompozit_macros::comp_move;
 
 pub fn from_fn<U: ?Sized, C: Composition<Unit = U>, O, F: FnOnce(&mut C) -> O>(
     f: F,
@@ -82,7 +84,7 @@ pub mod private {
 
     pub fn composer<UnitProvider: Composition, Target>(
         _: &UnitProvider,
-    ) -> Composer<UnitProvider::Unit, Target, PhantomComposition<UnitProvider::Unit>> {
+    ) -> Composer<UnitProvider::Unit, Target, StubComposition<UnitProvider::Unit>> {
         Composer(StubComposer(PhantomData, PhantomData, PhantomData))
     }
 
@@ -136,8 +138,9 @@ pub mod private {
     }
 
     impl<Unit: ?Sized, Target, Stub: Composition<Unit = Unit>> Composer<Unit, Target, Stub> {
-        pub fn check<C: HasUnit>(&self, _: &mut C)
+        pub fn check<C>(&self, _: &mut C)
         where
+            C: HasUnit<Unit = Unit>,
             (): AreSame<C::Unit, Unit>,
         {
         }
@@ -159,11 +162,35 @@ pub mod private {
     pub trait CastNever<R: Recomposition<Unit = NeverUnit>>: Sized {
         fn cast<U: ?Sized>(&self, i: R) -> impl Recomposition<Unit = U, Output = R::Output> {
             let output = i.apply(&mut Composition::init());
-            PhantomRecomposition(PhantomData, output)
+            StubRecomposition(PhantomData, output)
         }
     }
 
-    pub trait Cast<C: Recomposition>: Sized {
+    pub trait IsRecomp<R> {}
+    impl<R: Recomposition> IsRecomp<R> for () {}
+
+    pub fn check_to_recomp<R>(_: &R)
+    where
+        R: Recomposition,
+    {
+    }
+
+    pub trait CastStub<R>: Sized {
+        fn cast<U: ?Sized>(&self, i: R) -> impl Recomposition<Unit = U, Output = ()> {
+            StubRecomposition(PhantomData, ())
+        }
+    }
+
+    pub trait FallbackCastPrimary<C: Recomposition>: Sized {
+        fn cast<T: ?Sized>(&self, i: C) -> C
+        where
+            C: Recomposition<Unit = T>,
+        {
+            i
+        }
+    }
+
+    pub trait FallbackCastSecondary<C: Recomposition>: Sized {
         fn cast<T: ?Sized>(&self, i: C) -> C
         where
             C: Recomposition<Unit = T>,
@@ -174,33 +201,37 @@ pub mod private {
 
     impl<R: Recomposition<Unit = NeverUnit>> CastNever<R> for &Caster<R> {}
 
-    impl<R: Recomposition> Cast<R> for Caster<R> {}
+    impl<R: Recomposition> FallbackCastPrimary<R> for &Caster<R> {}
 
-    pub struct PhantomRecomposition<T: ?Sized, O>(PhantomData<T>, O);
-    pub struct PhantomComposition<T: ?Sized>(PhantomData<T>);
-    pub struct PhantomViewer<T: ?Sized>(PhantomData<T>);
+    impl<R: Recomposition> FallbackCastSecondary<R> for Caster<R> {}
 
-    impl<T: ?Sized, O> PhantomRecomposition<T, O> {
+    impl<R> CastStub<R> for Caster<R> {}
+
+    pub struct StubRecomposition<T: ?Sized, O>(PhantomData<T>, O);
+    pub struct StubComposition<T: ?Sized>(PhantomData<T>);
+    pub struct StubViewer<T: ?Sized>(PhantomData<T>);
+
+    impl<T: ?Sized, O> StubRecomposition<T, O> {
         pub fn new(output: O) -> Self {
             Self(PhantomData, output)
         }
     }
 
-    impl<T: ?Sized> Default for PhantomComposition<T> {
+    impl<T: ?Sized> Default for StubComposition<T> {
         fn default() -> Self {
             Self(PhantomData)
         }
     }
 
-    impl<T: ?Sized> Default for PhantomViewer<T> {
+    impl<T: ?Sized> Default for StubViewer<T> {
         fn default() -> Self {
             Self(PhantomData)
         }
     }
 
-    impl<Unit: ?Sized, Output> Recomposition for PhantomRecomposition<Unit, Output> {
+    impl<Unit: ?Sized, Output> Recomposition for StubRecomposition<Unit, Output> {
         type Unit = Unit;
-        type Composition = PhantomComposition<Unit>;
+        type Composition = StubComposition<Unit>;
         type Output = Output;
 
         fn apply(self, composition: &mut Self::Composition) -> Self::Output {
@@ -208,10 +239,10 @@ pub mod private {
         }
     }
 
-    impl<Unit: ?Sized> Composition for PhantomComposition<Unit> {
+    impl<Unit: ?Sized> Composition for StubComposition<Unit> {
         type Unit = Unit;
         type Viewer<'s>
-            = PhantomViewer<Self::Unit>
+            = StubViewer<Self::Unit>
         where
             Self: 's;
 
@@ -220,11 +251,11 @@ pub mod private {
         }
 
         fn view<'s>(&'s mut self) -> Self::Viewer<'s> {
-            PhantomViewer(PhantomData)
+            StubViewer(PhantomData)
         }
     }
 
-    impl<Item: ?Sized> Viewer for PhantomViewer<Item> {
+    impl<Item: ?Sized> Viewer for StubViewer<Item> {
         type Item = Item;
 
         fn move_next(&mut self) {}

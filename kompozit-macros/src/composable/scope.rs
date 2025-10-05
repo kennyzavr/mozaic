@@ -1,18 +1,16 @@
 use proc_macro2::Span;
 
-use crate::ComposeNode;
-use crate::id::EntityId;
+use super::ComposeNode;
+use super::id::Id;
 
-pub struct Scope<Parent> {
+pub(super) struct Scope<Parent> {
     parent: Parent,
-    span: Span,
     items: Vec<Span>,
 }
 
-pub struct ScopeItem {
+pub(super) struct ScopeItem {
     index: usize,
     span: Span,
-    scope_span: Span,
 }
 
 fn scope_id_name() -> &'static str {
@@ -28,27 +26,25 @@ format!("scope item {} composer", index)
 }
 
 impl<Parent: ComposeNode> Scope<Parent> {
-    pub fn new(parent: Parent, span: Span) -> Self {
+    pub(super) fn new(parent: Parent) -> Self {
         Self {
             parent,
-            span,
             items: vec![],
         }
     }
 
-    pub fn add_item(&mut self, span: Span) -> ScopeItem {
+    pub(super) fn add_item(&mut self, span: Span) -> ScopeItem {
         let index = self.items.len();
         self.items.push(span);
         ScopeItem {
             index,
             span,
-            scope_span: self.span,
         }
     }
 
-    pub fn prologue(&self) -> proc_macro2::TokenStream {
+    pub(super) fn prologue(&self) -> proc_macro2::TokenStream {
         let (scope_gt, scope_gv, scope_lv) = {
-            let id = EntityId {
+            let id = Id {
                 name: scope_id_name(),
                 span: Span::mixed_site(),
             };
@@ -59,8 +55,8 @@ impl<Parent: ComposeNode> Scope<Parent> {
             .items
             .iter()
             .enumerate()
-            .map(|(index, span)| {
-                let id = EntityId {
+            .map(|(index, _span)| {
+                let id = Id {
                     name: item_id_name(index),
                     span: Span::mixed_site(),
                 };
@@ -70,13 +66,13 @@ impl<Parent: ComposeNode> Scope<Parent> {
 
         let item_infer = vec![quote::quote! { _ }; self.items.len()];
 
-        let viewer_gt = EntityId {
+        let viewer_gt = Id {
             name: "scope viewer",
             span: Span::mixed_site(),
         }
         .gt();
 
-        let viewer_state_gt = EntityId {
+        let viewer_state_gt = Id {
             name: "scope viewer state",
             span: Span::mixed_site(),
         }
@@ -108,8 +104,8 @@ impl<Parent: ComposeNode> Scope<Parent> {
         let parent_prologue = self.parent.prologue();
 
         let item = self.items.iter().enumerate()
-            .map(|(index, span)| {
-                let id = EntityId {
+            .map(|(index, _span)| {
+                let id = Id {
                     name: item_id_name(index),
                     span: Span::mixed_site(),
                 };
@@ -236,18 +232,19 @@ impl<Parent: ComposeNode> Scope<Parent> {
             #parent_prologue
 
             #[allow(non_snake_case)]
+            #[allow(unused_mut)]
             let mut #scope_gv: &mut #scope_gt<_, #(#item_infer),*> = #parent_gv;
         }
     }
 
-    pub fn epilogue(&self) -> proc_macro2::TokenStream {
+    pub(super) fn epilogue(&self) -> proc_macro2::TokenStream {
         self.parent.epilogue()
     }
 }
 
 impl ComposeNode for ScopeItem {
-    fn id(&self) -> EntityId<impl AsRef<str>> {
-        EntityId {
+    fn id(&self) -> Id<impl AsRef<str>> {
+        Id {
             name: item_id_name(self.index),
             span: Span::mixed_site()
         }
@@ -259,18 +256,18 @@ impl ComposeNode for ScopeItem {
             (id.gt(), id.gv())
         };
 
-        let scope_gv = EntityId {
+        let scope_gv = Id {
                 name: scope_id_name(),
                 span: Span::mixed_site(),
             }.gv();
 
-        let composer_gv = EntityId {
+        let composer_gv = Id {
             name: item_composer_id_name(self.index),
             span: Span::mixed_site(),
         }
         .gv();
 
-        let default_slot_gv = EntityId {
+        let default_slot_gv = Id {
             name: format!("scope item {} default slot", self.index),
             span: Span::mixed_site(),
         }
@@ -282,12 +279,14 @@ impl ComposeNode for ScopeItem {
                 let #composer_gv = ::kompozit::private::composer(&*#scope_gv);
 
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #item_gv = {
                     use ::core::convert::From;
                     #item_gt::from(&mut #scope_gv)
                 };
 
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #default_slot_gv = ::kompozit::Composition::init();
 
                 #[allow(non_snake_case)]
@@ -303,12 +302,14 @@ impl ComposeNode for ScopeItem {
                 let #composer_gv = ::kompozit::private::composer(&*#scope_gv);
 
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #item_gv = {
                     use ::core::convert::From;
                     #item_gt::from(&mut #scope_gv)
                 };
 
                 #[allow(non_snake_case)]
+                #[allow(unused_mut)]
                 let mut #default_slot_gv = ::kompozit::Composition::init();
 
                 #[allow(non_snake_case)]
@@ -322,13 +323,13 @@ impl ComposeNode for ScopeItem {
     }
 
     fn epilogue(&self) -> proc_macro2::TokenStream {
-        let composer_gv = EntityId {
+        let composer_gv = Id {
             name: item_composer_id_name(self.index),
             span: Span::mixed_site(),
         }
         .gv();
 
-            let item_gv = EntityId {
+            let item_gv = Id {
                 name: item_id_name(self.index),
                 span: Span::mixed_site().located_at(self.span),
             }.gv();

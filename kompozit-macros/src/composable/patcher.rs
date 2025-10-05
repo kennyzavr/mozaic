@@ -1,17 +1,11 @@
 use proc_macro_error::emit_error;
 use proc_macro2::Span;
-use quote::ToTokens;
 use syn::{spanned::Spanned, visit::Visit, visit_mut::VisitMut};
 
-use crate::{
-    ComposeNode,
-    scope::{Scope, ScopeItem},
-    selection::Selection,
-};
+use super::{COMPOSE_KEYWORD, ComposeNode, scope::Scope, selection::Selection};
+use crate::composable::id::Id;
 
-const COMPOSE_KEYWORD: &str = "compose";
-
-pub struct Patcher<Parent> {
+pub(super) struct Patcher<Parent> {
     pub scope: Scope<Parent>,
 }
 
@@ -66,14 +60,14 @@ impl<Parent: ComposeNode> Patcher<Parent> {
 
         let mut selection = {
             let scope_item = self.scope.add_item(Span::call_site());
-            Selection::new(scope_item, Span::call_site())
+            Selection::new(scope_item)
         };
 
         {
             let mut patcher = Patcher {
                 scope: {
                     let variant = selection.add_variant(Span::call_site());
-                    Scope::new(variant, Span::call_site())
+                    Scope::new(variant)
                 },
             };
 
@@ -94,7 +88,7 @@ impl<Parent: ComposeNode> Patcher<Parent> {
             let mut patcher = Patcher {
                 scope: {
                     let variant = selection.add_variant(Span::call_site());
-                    Scope::new(variant, Span::call_site())
+                    Scope::new(variant)
                 },
             };
 
@@ -132,86 +126,142 @@ impl<Parent: ComposeNode> Patcher<Parent> {
 
         let mut selection = {
             let scope_item = self.scope.add_item(expr_if.span());
-            Selection::new(scope_item, expr_if.span())
+            Selection::new(scope_item)
         };
+
+        let then_reached_gv = Id {
+            name: "then reached",
+            span: Span::mixed_site(),
+        }
+        .gv();
 
         {
             let block = &mut expr_if.then_branch;
             let mut patcher = Patcher {
                 scope: {
                     let variant = selection.add_variant(block.span());
-                    Scope::new(variant, block.span())
+                    Scope::new(variant)
                 },
             };
 
             patcher.visit_block_mut(block);
             let prologue = patcher.scope.prologue();
             let epilogue = patcher.scope.epilogue();
-            *block = syn::parse_quote_spanned! { proc_macro2::Span::mixed_site() =>
+
+            let expr_value_gv = Id {
+                name: "expr value",
+                span: block.span(),
+            }
+            .gv();
+            let epilogue = quote::quote_spanned! { Span::mixed_site() =>
+                #epilogue
+                #expr_value_gv
+            };
+            let epilogue = quote::quote_spanned! { block.span() =>
                 {
-                    #prologue
-                    let value = {
-                        #block
-                    };
                     #epilogue
-                    value
+                }
+            };
+            let epilogue = quote::quote_spanned! { Span::mixed_site() =>
+                    #prologue
+                    #then_reached_gv = true;
+                    let #expr_value_gv =#block;
+                    #[allow(unreachable_code)]
+                    #epilogue
+            };
+            *block = syn::parse_quote_spanned! { block.span() =>
+                {
+                    #epilogue
                 }
             };
         }
 
-        if let Some((_, block)) = expr_if.else_branch.as_mut() {
+        let state_reset = if let Some((_, block)) = expr_if.else_branch.as_mut() {
             let block = block.as_mut();
             let mut patcher = Patcher {
                 scope: {
                     let variant = selection.add_variant(block.span());
-                    Scope::new(variant, block.span())
+                    Scope::new(variant)
                 },
             };
 
             patcher.visit_expr_mut(block);
             let prologue = patcher.scope.prologue();
             let epilogue = patcher.scope.epilogue();
-            *block = syn::parse_quote_spanned! { proc_macro2::Span::mixed_site() =>
+
+            let expr_value_gv = Id {
+                name: "expr value",
+                span: block.span(),
+            }
+            .gv();
+            let epilogue = quote::quote_spanned! { Span::mixed_site() =>
+                #epilogue
+                #expr_value_gv
+            };
+            let epilogue = quote::quote_spanned! { block.span() =>
                 {
-                    #prologue
-                    let value = {
-                        #block
-                    };
                     #epilogue
-                    value
                 }
             };
+            let epilogue = quote::quote_spanned! { Span::mixed_site() =>
+                    #then_reached_gv = false;
+                    #prologue
+                    let #expr_value_gv = #block;
+                    #[allow(unreachable_code)]
+                    #epilogue
+            };
+            *block = syn::parse_quote_spanned! { block.span() =>
+                {
+                    #epilogue
+                }
+            };
+
+            None
         } else {
             let patcher = Patcher {
                 scope: {
-                    let variant = selection.add_variant(Span::call_site());
-                    Scope::new(variant, Span::call_site())
+                    let variant = selection.add_variant(Span::mixed_site());
+                    Scope::new(variant)
                 },
             };
 
             let prologue = patcher.scope.prologue();
             let epilogue = patcher.scope.epilogue();
-            expr_if.else_branch = Some((
-                syn::Token![else](proc_macro2::Span::call_site()),
-                Box::new(
-                    syn::parse_quote_spanned! { proc_macro2::Span::mixed_site() =>
-                        {
-                            #prologue
-                            #epilogue
-                        }
-                    },
-                ),
-            ));
-        }
+
+            Some(quote::quote_spanned! { Span::mixed_site() =>
+                if #then_reached_gv == false {
+                    #prologue
+                    #epilogue
+                }
+            })
+        };
 
         let prologue = selection.prologue();
         let epilogue = selection.epilogue();
-        syn::parse_quote_spanned! { proc_macro2::Span::mixed_site() =>
+        let expr_value_gv = Id {
+            name: "expr value",
+            span: expr_if.span(),
+        }
+        .gv();
+        let epilogue = quote::quote_spanned! { Span::mixed_site() =>
+            #epilogue
+            #expr_value_gv
+        };
+        let epilogue = quote::quote_spanned! { expr_if.span() =>
             {
-                #prologue
-                let value = #expr_if;
                 #epilogue
-                value
+            }
+        };
+        syn::parse_quote_spanned! { Span::mixed_site() =>
+            {
+                #[allow(unused_mut)]
+                #[allow(non_snake_case)]
+                let mut #then_reached_gv = false;
+                #prologue
+                let #expr_value_gv = #expr_if;
+                #state_reset
+                #[allow(unreachable_code)]
+                #epilogue
             }
         }
     }
@@ -222,7 +272,7 @@ impl<Parent: ComposeNode> Patcher<Parent> {
 
         let mut selection = {
             let scope_item = self.scope.add_item(expr_match.span());
-            Selection::new(scope_item, expr_match.span())
+            Selection::new(scope_item)
         };
 
         for arm in expr_match.arms.iter_mut() {
@@ -239,35 +289,59 @@ impl<Parent: ComposeNode> Patcher<Parent> {
             let mut patcher = Patcher {
                 scope: {
                     let variant = selection.add_variant(span);
-                    Scope::new(variant, span)
+                    Scope::new(variant)
                 },
             };
 
             patcher.visit_expr_mut(body);
             let prologue = patcher.scope.prologue();
             let epilogue = patcher.scope.epilogue();
+            let expr_value_gv = Id {
+                name: "expr value",
+                span,
+            }
+            .gv();
+            let epilogue = quote::quote_spanned! { Span::mixed_site() =>
+                #epilogue
+                #expr_value_gv
+            };
+            let epilogue = quote::quote_spanned! { span =>
+                {
+                    #epilogue
+                }
+            };
             *body = syn::parse_quote_spanned! { proc_macro2::Span::mixed_site() =>
                 {
                     #prologue
-                    let value = {
-                        #body
-                    };
+                    let expr_value_gv = #body;
+                    #[allow(unreachable_code)]
                     #epilogue
-                    value
                 }
             };
         }
 
         let prologue = selection.prologue();
         let epilogue = selection.epilogue();
+        let expr_value_gv = Id {
+            name: "expr value",
+            span: expr_match.span(),
+        }
+        .gv();
+        let epilogue = quote::quote_spanned! { Span::mixed_site() =>
+            #epilogue
+            #expr_value_gv
+        };
+        let epilogue = quote::quote_spanned! { expr_match.span() =>
+            {
+                #epilogue
+            }
+        };
         syn::parse_quote_spanned! { proc_macro2::Span::mixed_site() =>
             {
                 #prologue
-                let value = {
-                    #expr_match
-                };
+                let #expr_value_gv = #expr_match;
+                #[allow(unreachable_code)]
                 #epilogue
-                value
             }
         }
     }
@@ -301,11 +375,18 @@ impl<Parent: ComposeNode> Patcher<Parent> {
 
         let scope_item = self.scope.add_item(member.span());
         let scope_item_gv = {
-            let mut id = scope_item.id();
+            let id = scope_item.id();
             id.gv()
         };
         let prologue = scope_item.prologue();
         let epilogue = scope_item.epilogue();
+
+        let recomp_source_v = quote::format_ident!("recomp_source", span = member.span());
+        let recomp_v = quote::format_ident!("recomp", span = member.span());
+
+        let recomp_check = quote::quote_spanned! { member.span() =>
+            ::kompozit::private::check_to_recomp(&#recomp_source_v);
+        };
 
         syn::parse_quote_spanned! { proc_macro2::Span::mixed_site() =>
             {
@@ -313,10 +394,17 @@ impl<Parent: ComposeNode> Patcher<Parent> {
 
                 #[allow(non_snake_case)]
                 let #scope_item_gv: &mut ::core::option::Option<_> = #scope_item_gv;
-                let recomposition = ::kompozit::Recomposition::apply(#base, #scope_item_gv.get_or_insert_with(|| ::kompozit::Composition::init()));
+                let #recomp_source_v = #base;
+                #recomp_check
+                let #recomp_v = {
+                    #[allow(unused_imports)]
+                    use ::kompozit::private::{Caster, CastStub, FallbackCastPrimary};
+                    let caster = &&Caster::new(&#recomp_source_v);
+                    caster.cast(#recomp_source_v)
+                };
+                let recomposition = ::kompozit::Recomposition::apply(#recomp_v, #scope_item_gv.get_or_insert_with(|| ::kompozit::Composition::init()));
 
                 #epilogue
-
                 recomposition
             }
         }
